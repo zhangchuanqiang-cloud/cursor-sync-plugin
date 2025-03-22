@@ -6,7 +6,6 @@ yarn.lock
 # 编译输出
 dist/
 out/
-*.vsix
 
 # 日志
 *.log
