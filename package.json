@@ -1,0 +1,91 @@
+{
+  "name": "cursor-sync",
+  "displayName": "Cursor Sync",
+  "version": "0.1.0",
+  "description": "同步Cursor安装的插件、MCP规则、代码片段以及设置",
+  "main": "dist/extension.js",
+  "publisher": "cursor-sync",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/username/cursor-sync"
+  },
+  "icon": "images/icon.png",
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "package": "vsce package"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/chokidar": "^2.1.3",
+    "@types/node": "^18.15.11",
+    "@types/vscode": "^1.87.0",
+    "ts-loader": "^9.4.2",
+    "typescript": "^5.0.4",
+    "webpack": "^5.80.0",
+    "webpack-cli": "^5.0.2"
+  },
+  "dependencies": {
+    "@octokit/rest": "^19.0.13",
+    "axios": "^1.6.2",
+    "buffer": "^6.0.3",
+    "chokidar": "^3.5.3"
+  },
+  "engines": {
+    "vscode": "^1.87.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cursor-sync.syncToGithub",
+        "title": "同步Cursor配置到GitHub"
+      },
+      {
+        "command": "cursor-sync.syncFromGithub",
+        "title": "从GitHub导入Cursor配置"
+      },
+      {
+        "command": "cursor-sync.openSettings",
+        "title": "打开Cursor同步设置"
+      }
+    ],
+    "configuration": {
+      "title": "Cursor配置同步",
+      "properties": {
+        "cursor-sync.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub个人访问令牌(需要repo权限)"
+        },
+        "cursor-sync.githubUsername": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub用户名"
+        },
+        "cursor-sync.githubRepo": {
+          "type": "string",
+          "default": "cursor-sync",
+          "description": "GitHub仓库名称"
+        },
+        "cursor-sync.syncExtensions": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否同步特殊扩展目录"
+        },
+        "cursor-sync.extensionsList": {
+          "type": "string",
+          "default": "qianggaogao.vscode-gutter-preview-cn-0.32.2,zh-community.insertseq-zh-0.10.1-zh",
+          "description": "需要同步的扩展列表，用逗号分隔"
+        }
+      }
+    }
+  },
+  "categories": [
+    "Other"
+  ]
+}

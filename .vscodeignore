@@ -1,0 +1,10 @@
+.vscode/**
+.gitignore
+**/node_modules/**
+**/*.ts
+**/*.map
+.yarnrc
+**/tsconfig.json
+**/webpack.config.js
+yarn.lock
+images/*.svg
