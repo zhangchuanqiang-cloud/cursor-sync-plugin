@@ -72,14 +72,9 @@
           "default": "cursor-sync",
           "description": "GitHub仓库名称"
         },
-        "cursor-sync.syncExtensions": {
-          "type": "boolean",
-          "default": true,
-          "description": "是否同步特殊扩展目录"
-        },
         "cursor-sync.extensionsList": {
           "type": "string",
-          "default": "qianggaogao.vscode-gutter-preview-cn-0.32.2,zh-community.insertseq-zh-0.10.1-zh",
+          "default": "",
           "description": "需要同步的扩展列表，用逗号分隔"
         }
       }

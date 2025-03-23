@@ -41,8 +41,7 @@ const EXTENSION_INCLUDE_PATTERNS = [
 
 // 默认配置
 const DEFAULT_CONFIG = {
-    syncExtensions: true,  // 默认同步扩展
-    extensionsList: 'qianggaogao.vscode-gutter-preview-cn-0.32.2,zh-community.insertseq-zh-0.10.1-zh' // 默认同步的扩展列表
+    extensionsList: '' // 扩展列表默认为空
 };
 
 // 同步状态
@@ -86,7 +85,6 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('cursor-sync.showMenu', showSyncMenu),
         vscode.commands.registerCommand('cursor-sync.syncToGithub', () => syncToGitHub()),
         vscode.commands.registerCommand('cursor-sync.syncFromGithub', () => syncFromGitHub()),
-        vscode.commands.registerCommand('cursor-sync.toggleExtensionSync', toggleExtensionSync),
         vscode.commands.registerCommand('cursor-sync.openSettings', openSettings)
     );
 
@@ -225,33 +223,28 @@ async function syncToGitHub(): Promise<void> {
             console.log(`代码片段目录不存在，跳过: ${CONFIG_PATHS.snippetsDir}`);
         }
 
-        // 添加特殊扩展文件
-        const shouldSyncExtensions = config.get<boolean>('syncExtensions', DEFAULT_CONFIG.syncExtensions);
-        if (shouldSyncExtensions) {
-            // 从设置中获取扩展列表
-            const extensionsListStr = config.get<string>('extensionsList', DEFAULT_CONFIG.extensionsList);
-            const extensionsList = extensionsListStr.split(',').map(ext => ext.trim()).filter(ext => ext);
+        // 添加扩展文件
+        // 从设置中获取扩展列表
+        const extensionsListStr = config.get<string>('extensionsList', DEFAULT_CONFIG.extensionsList);
+        const extensionsList = extensionsListStr.split(',').map(ext => ext.trim()).filter(ext => ext);
 
-            for (const extName of extensionsList) {
-                const extDir = path.join(CONFIG_PATHS.extensionsDir, extName);
-                if (fs.existsSync(extDir)) {
-                    const specificFiles = [ 'package.json', 'README.md', 'extension.vsixmanifest', 'extension.js' ];
+        for (const extName of extensionsList) {
+            const extDir = path.join(CONFIG_PATHS.extensionsDir, extName);
+            if (fs.existsSync(extDir)) {
+                const specificFiles = [ 'package.json', 'README.md', 'extension.vsixmanifest', 'extension.js' ];
 
-                    for (const fileName of specificFiles) {
-                        const filePath = path.join(extDir, fileName);
-                        if (fs.existsSync(filePath)) {
-                            filesToSync.push({
-                                localPath: filePath,
-                                remotePath: `extensions/${extName}/${fileName}`
-                            });
-                        }
+                for (const fileName of specificFiles) {
+                    const filePath = path.join(extDir, fileName);
+                    if (fs.existsSync(filePath)) {
+                        filesToSync.push({
+                            localPath: filePath,
+                            remotePath: `extensions/${extName}/${fileName}`
+                        });
                     }
-                } else {
-                    console.log(`扩展目录不存在，跳过: ${extDir}`);
                 }
+            } else {
+                console.log(`扩展目录不存在，跳过: ${extDir}`);
             }
-        } else {
-            console.log('根据配置，跳过同步扩展目录');
         }
 
         console.log(`准备同步 ${filesToSync.length} 个文件到GitHub`);
@@ -353,15 +346,17 @@ async function syncFileToGitHub(localFilePath: string, remoteFilePath: string, u
 
         let isUpdate = false;
         let fileSha = '';
+        let fileExists = false;
 
+        // 先检查文件是否存在于GitHub
         try {
-            // 先检查文件是否存在于GitHub
             const fileInfo = await octokit.repos.getContent({
                 owner: username,
                 repo: repo,
                 path: remoteFilePath
             });
 
+            fileExists = true;
             isUpdate = true;
 
             if ('sha' in fileInfo.data) {
@@ -391,11 +386,134 @@ async function syncFileToGitHub(localFilePath: string, remoteFilePath: string, u
         } catch (error) {
             // 文件不存在，创建新文件
             if ((error as any).status === 404) {
+                fileExists = false;
                 isUpdate = false;
                 console.log(`文件不存在，将创建: ${remoteFilePath}`);
             } else {
                 // 其他错误，抛出异常
                 throw error;
+            }
+        }
+
+        // 如果是强制模式且文件存在，尝试先删除文件
+        if (forceOverwrite && fileExists) {
+            try {
+                console.log(`尝试直接删除已存在的文件: ${remoteFilePath}`);
+
+                // 获取仓库默认分支信息
+                const repoInfo = await octokit.repos.get({
+                    owner: username,
+                    repo: repo
+                });
+                const defaultBranch = repoInfo.data.default_branch || 'main';
+                console.log(`仓库默认分支: ${defaultBranch}`);
+
+                // 使用低级Git API方式删除并重新创建文件
+                // 1. 获取最新的分支引用
+                console.log(`获取分支引用: heads/${defaultBranch}`);
+                const refResponse = await octokit.git.getRef({
+                    owner: username,
+                    repo: repo,
+                    ref: `heads/${defaultBranch}`
+                });
+
+                // 2. 获取最新提交
+                console.log(`获取最新提交: ${refResponse.data.object.sha.substring(0, 8)}...`);
+                const commitResponse = await octokit.git.getCommit({
+                    owner: username,
+                    repo: repo,
+                    commit_sha: refResponse.data.object.sha
+                });
+
+                // 3. 获取完整的树
+                console.log(`获取当前树: ${commitResponse.data.tree.sha.substring(0, 8)}...`);
+                const treeResponse = await octokit.git.getTree({
+                    owner: username,
+                    repo: repo,
+                    tree_sha: commitResponse.data.tree.sha,
+                    recursive: '1'
+                });
+
+                // 4. 创建新的blob
+                console.log(`创建文件内容blob...`);
+                const blobResult = await octokit.git.createBlob({
+                    owner: username,
+                    repo: repo,
+                    content: contentBase64,
+                    encoding: 'base64'
+                });
+
+                // 5. 准备新的树结构，只过滤掉要更新的文件
+                const newTree: Array<{
+                    path: string;
+                    mode: "100644" | "100755" | "040000" | "160000" | "120000";
+                    type: "blob" | "tree" | "commit";
+                    sha: string | null;
+                }> = [];
+
+                // 确保路径格式正确
+                let treePath = remoteFilePath;
+                if (treePath.startsWith('/')) {
+                    treePath = treePath.substring(1);
+                }
+
+                // 从原树中复制除目标文件外的所有项目
+                for (const item of treeResponse.data.tree) {
+                    if (item.path && item.path !== treePath && item.mode && item.type && item.sha) {
+                        // 确保模式和类型符合要求
+                        const mode = item.mode as "100644" | "100755" | "040000" | "160000" | "120000";
+                        const type = item.type as "blob" | "tree" | "commit";
+
+                        newTree.push({
+                            path: item.path,
+                            mode: mode,
+                            type: type,
+                            sha: item.sha
+                        });
+                    }
+                }
+
+                // 添加更新后的文件
+                newTree.push({
+                    path: treePath,
+                    mode: "100644",
+                    type: "blob",
+                    sha: blobResult.data.sha
+                });
+
+                // 6. 创建新树
+                console.log(`创建新的树结构...`);
+                const createTreeResponse = await octokit.git.createTree({
+                    owner: username,
+                    repo: repo,
+                    tree: newTree
+                });
+
+                // 7. 创建新提交
+                console.log(`创建新的提交...`);
+                const newCommit = await octokit.git.createCommit({
+                    owner: username,
+                    repo: repo,
+                    message: `强制更新文件 ${remoteFilePath} (完全重建)`,
+                    tree: createTreeResponse.data.sha,
+                    parents: [ refResponse.data.object.sha ]
+                });
+
+                // 8. 更新引用指向新提交
+                console.log(`更新分支引用指向新提交...`);
+                await octokit.git.updateRef({
+                    owner: username,
+                    repo: repo,
+                    ref: `heads/${defaultBranch}`,
+                    sha: newCommit.data.sha,
+                    force: true // 强制更新
+                });
+
+                console.log(`通过Git API直接替换成功: ${remoteFilePath}`);
+                return;
+            } catch (deleteError) {
+                console.error(`强制删除重建失败: ${remoteFilePath}`, deleteError);
+                // 失败后继续尝试其他方法
             }
         }
 
@@ -474,251 +592,62 @@ async function syncFileToGitHub(localFilePath: string, remoteFilePath: string, u
                         });
                         console.log(`使用正确SHA更新文件成功: ${remoteFilePath}`);
                     } catch (retryError) {
-                        if (forceOverwrite) {
-                            // 在强制覆盖模式下，尝试先删除文件再创建
-                            console.log(`SHA冲突解决失败，尝试删除并重新创建文件: ${remoteFilePath}`);
-                            try {
-                                // 获取最新SHA，多次尝试不同的方法获取
-                                let correctedSha = '';
+                        // 重试失败，尝试最后的方法 - 使用GitHub API的token直接请求
+                        console.log(`SHA冲突修复失败，尝试最后的方法 - 直接API请求: ${remoteFilePath}`);
 
-                                // 1. 检查错误消息中是否包含"does not match"，可能包含正确的SHA
-                                const doesNotMatchRegex = /does not match ([a-f0-9]+)/i;
-                                const doesNotMatchResult = String(retryError).match(doesNotMatchRegex);
-                                if (doesNotMatchResult && doesNotMatchResult[ 1 ] && doesNotMatchResult[ 1 ].length >= 40) {
-                                    correctedSha = doesNotMatchResult[ 1 ];
-                                    console.log(`从错误消息中提取SHA（does not match）: ${correctedSha.slice(0, 8)}...`);
-                                }
-
-                                // 2. 如果上面方法失败，再次尝试获取文件信息
-                                if (!correctedSha) {
-                                    console.log(`尝试重新获取文件SHA...`);
-                                    try {
-                                        const fileInfo = await octokit.repos.getContent({
-                                            owner: username,
-                                            repo: repo,
-                                            path: remoteFilePath
-                                        });
-
-                                        if ('sha' in fileInfo.data) {
-                                            correctedSha = fileInfo.data.sha;
-                                        } else if (Array.isArray(fileInfo.data) && fileInfo.data.length > 0 && 'sha' in fileInfo.data[ 0 ]) {
-                                            correctedSha = fileInfo.data[ 0 ].sha;
-                                        }
-                                        console.log(`获取到文件SHA: ${correctedSha.slice(0, 8)}...`);
-                                    } catch (e) {
-                                        console.error(`获取文件信息失败，将尝试使用原SHA或最后一次提取的SHA`);
-                                    }
-                                }
-
-                                // 使用获取到的SHA，或者回退到之前可能已知的SHA
-                                const shaToUse = correctedSha || fileSha;
-                                if (!shaToUse || shaToUse.length < 40) {
-                                    throw new Error(`无法获取有效的文件SHA，无法删除文件`);
-                                }
-
-                                console.log(`准备删除文件，使用SHA: ${shaToUse.slice(0, 8)}...`);
-
-                                // 尝试删除文件
-                                await octokit.repos.deleteFile({
-                                    owner: username,
-                                    repo: repo,
-                                    path: remoteFilePath,
-                                    message: `删除文件 ${remoteFilePath} (准备强制覆盖)`,
-                                    sha: shaToUse
-                                });
-
-                                // 成功删除后，创建新文件
-                                console.log(`文件删除成功，正在创建新文件...`);
-                                await octokit.repos.createOrUpdateFileContents({
-                                    owner: username,
-                                    repo: repo,
-                                    path: remoteFilePath,
-                                    message: `创建文件 ${remoteFilePath} (强制覆盖)`,
-                                    content: contentBase64
-                                });
-                                console.log(`通过删除并重新创建成功更新文件: ${remoteFilePath}`);
-                            } catch (finalError: any) {
-                                // 如果删除也失败，尝试一种最终的方法：使用低级Git API方式
-                                try {
-                                    console.log(`删除文件失败，尝试使用低级Git API覆盖（最终方案）...`);
-
-                                    // 获取仓库默认分支信息...
-                                    console.log(`获取仓库默认分支信息...`);
-                                    const repoInfo = await octokit.repos.get({
-                                        owner: username,
-                                        repo: repo
-                                    });
-                                    const defaultBranch = repoInfo.data.default_branch || 'main';
-                                    console.log(`仓库默认分支: ${defaultBranch}`);
-
-                                    // 创建blob
-                                    console.log(`创建文件内容blob...`);
-                                    const blobResult = await octokit.git.createBlob({
-                                        owner: username,
-                                        repo: repo,
-                                        content: contentBase64,
-                                        encoding: 'base64'
-                                    });
-
-                                    // 获取最新的引用（默认分支）
-                                    console.log(`获取分支引用: heads/${defaultBranch}`);
-                                    const refResponse = await octokit.git.getRef({
-                                        owner: username,
-                                        repo: repo,
-                                        ref: `heads/${defaultBranch}`
-                                    });
-
-                                    // 获取最新提交
-                                    console.log(`获取最新提交: ${refResponse.data.object.sha.substring(0, 8)}...`);
-                                    const commitResponse = await octokit.git.getCommit({
-                                        owner: username,
-                                        repo: repo,
-                                        commit_sha: refResponse.data.object.sha
-                                    });
-
-                                    // 获取完整的树
-                                    console.log(`获取当前树: ${commitResponse.data.tree.sha.substring(0, 8)}...`);
-                                    const treeResponse = await octokit.git.getTree({
-                                        owner: username,
-                                        repo: repo,
-                                        tree_sha: commitResponse.data.tree.sha,
-                                        recursive: '1'
-                                    });
-
-                                    // 准备新的树结构，保留原有树结构，只更新目标文件
-                                    const newTree: Array<{
-                                        path: string;
-                                        mode: "100644" | "100755" | "040000" | "160000" | "120000";
-                                        type: "blob" | "tree" | "commit";
-                                        sha: string | null;
-                                    }> = [];
-
-                                    // 从原树中复制所需项目，确保类型正确
-                                    for (const item of treeResponse.data.tree) {
-                                        if (item.path && item.mode && item.type && item.sha) {
-                                            // 确保模式和类型符合要求
-                                            const mode = item.mode as "100644" | "100755" | "040000" | "160000" | "120000";
-                                            const type = item.type as "blob" | "tree" | "commit";
-
-                                            newTree.push({
-                                                path: item.path,
-                                                mode: mode,
-                                                type: type,
-                                                sha: item.sha
-                                            });
-                                        }
-                                    }
-
-                                    // 准备文件路径（确保路径格式正确）
-                                    let treePath = remoteFilePath;
-                                    // 移除前导斜杠（如果有）
-                                    if (treePath.startsWith('/')) {
-                                        treePath = treePath.substring(1);
-                                    }
-
-                                    // 查找并更新或添加目标文件
-                                    let fileFound = false;
-                                    for (let i = 0; i < newTree.length; i++) {
-                                        if (newTree[ i ].path === treePath) {
-                                            newTree[ i ].sha = blobResult.data.sha;
-                                            fileFound = true;
-                                            break;
-                                        }
-                                    }
-
-                                    // 如果文件不存在于树结构中，则添加
-                                    if (!fileFound) {
-                                        newTree.push({
-                                            path: treePath,
-                                            mode: "100644",
-                                            type: "blob",
-                                            sha: blobResult.data.sha
-                                        });
-                                    }
-
-                                    // 创建新树，保留现有结构，只修改目标文件
-                                    console.log(`创建新的树结构...`);
-                                    const createTreeResponse = await octokit.git.createTree({
-                                        owner: username,
-                                        repo: repo,
-                                        tree: newTree
-                                    });
-
-                                    // 创建新提交
-                                    console.log(`创建新的提交...`);
-                                    const newCommit = await octokit.git.createCommit({
-                                        owner: username,
-                                        repo: repo,
-                                        message: `通过低级Git API强制覆盖文件 ${remoteFilePath}`,
-                                        tree: createTreeResponse.data.sha,
-                                        parents: [ refResponse.data.object.sha ]
-                                    });
-
-                                    // 更新引用指向新提交
-                                    console.log(`更新分支引用指向新提交...`);
-                                    await octokit.git.updateRef({
-                                        owner: username,
-                                        repo: repo,
-                                        ref: `heads/${defaultBranch}`,
-                                        sha: newCommit.data.sha,
-                                        force: true // 强制更新
-                                    });
-
-                                    console.log(`通过低级Git API成功覆盖文件: ${remoteFilePath}`);
-                                } catch (apiError) {
-                                    console.error(`低级API覆盖也失败: ${remoteFilePath}`, apiError);
-                                    console.error(apiError);
-
-                                    // 作为最后的尝试，使用PUT方法直接更新文件
-                                    try {
-                                        console.log(`尝试使用PUT方法直接更新文件（最终紧急方案）...`);
-
-                                        // 使用最原始的方式：直接PUT请求更新文件
-                                        const token = vscode.workspace.getConfiguration('cursor-sync').get<string>('githubToken', '');
-                                        if (!token) {
-                                            throw new Error('未设置GitHub令牌');
-                                        }
-
-                                        // 确保路径格式正确
-                                        let apiPath = remoteFilePath;
-                                        if (apiPath.startsWith('/')) {
-                                            apiPath = apiPath.substring(1);
-                                        }
-
-                                        // 使用axios发送直接请求
-                                        const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}`;
-
-                                        // 先获取文件信息
-                                        const fileResponse = await axios.get(apiUrl, {
-                                            headers: {
-                                                'Authorization': `token ${token}`,
-                                                'Accept': 'application/vnd.github.v3+json',
-                                                'User-Agent': 'Cursor-Sync-Extension'
-                                            }
-                                        });
-
-                                        // 然后使用PUT更新文件
-                                        await axios.put(apiUrl, {
-                                            message: `强制更新文件 ${remoteFilePath} (紧急方案)`,
-                                            content: contentBase64,
-                                            sha: fileResponse.data.sha
-                                        }, {
-                                            headers: {
-                                                'Authorization': `token ${token}`,
-                                                'Accept': 'application/vnd.github.v3+json',
-                                                'User-Agent': 'Cursor-Sync-Extension'
-                                            }
-                                        });
-
-                                        console.log(`通过直接PUT请求成功覆盖文件: ${remoteFilePath}`);
-                                    } catch (directError) {
-                                        console.error(`所有方法均已失败，无法更新文件: ${remoteFilePath}`, directError);
-                                        throw new Error(`无法强制覆盖文件 ${remoteFilePath} - 已尝试所有可能的方法`);
-                                    }
-                                }
+                        try {
+                            const token = vscode.workspace.getConfiguration('cursor-sync').get<string>('githubToken', '');
+                            if (!token) {
+                                throw new Error('未设置GitHub令牌');
                             }
-                        } else {
-                            throw retryError;
+
+                            // 确保路径格式正确
+                            let apiPath = remoteFilePath;
+                            if (apiPath.startsWith('/')) {
+                                apiPath = apiPath.substring(1);
+                            }
+
+                            // 使用axios发送直接删除请求
+                            const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}`;
+
+                            // 首先获取最新文件信息（包含SHA）
+                            const getResponse = await axios.get(apiUrl, {
+                                headers: {
+                                    'Authorization': `token ${token}`,
+                                    'Accept': 'application/vnd.github.v3+json',
+                                    'User-Agent': 'Cursor-Sync-Extension'
+                                }
+                            });
+
+                            // 然后删除文件
+                            await axios.delete(apiUrl, {
+                                headers: {
+                                    'Authorization': `token ${token}`,
+                                    'Accept': 'application/vnd.github.v3+json',
+                                    'User-Agent': 'Cursor-Sync-Extension'
+                                },
+                                data: {
+                                    message: `删除文件以便强制更新 ${remoteFilePath}`,
+                                    sha: getResponse.data.sha
+                                }
+                            });
+
+                            // 最后创建新文件
+                            await axios.put(apiUrl, {
+                                message: `重新创建文件 ${remoteFilePath} (直接API方式)`,
+                                content: contentBase64
+                            }, {
+                                headers: {
+                                    'Authorization': `token ${token}`,
+                                    'Accept': 'application/vnd.github.v3+json',
+                                    'User-Agent': 'Cursor-Sync-Extension'
+                                }
+                            });
+
+                            console.log(`通过直接API请求成功更新文件: ${remoteFilePath}`);
+                        } catch (apiError) {
+                            console.error(`所有方法都失败，无法更新文件: ${remoteFilePath}`, apiError);
+                            throw new Error(`无法强制覆盖文件 ${remoteFilePath} - 所有尝试都失败`);
                         }
                     }
                 } else {
@@ -924,11 +853,6 @@ function handleSyncError(error: any, operation: string): void {
  * 显示同步菜单
  */
 async function showSyncMenu(): Promise<void> {
-    // 获取当前扩展同步状态
-    const config = vscode.workspace.getConfiguration('cursor-sync');
-    const isExtSyncEnabled = config.get<boolean>('syncExtensions', DEFAULT_CONFIG.syncExtensions);
-    const extSyncStatus = isExtSyncEnabled ? '禁用' : '启用';
-
     const options: MenuOption[] = [
         {
             label: '$(cloud-upload) 上传配置',
@@ -941,12 +865,6 @@ async function showSyncMenu(): Promise<void> {
             command: 'cursor-sync.syncFromGithub',
             detail: '从GitHub下载配置',
             icon: '$(cloud-download)'
-        },
-        {
-            label: `$(extensions) ${extSyncStatus}扩展同步`,
-            command: 'cursor-sync.toggleExtensionSync',
-            detail: `${extSyncStatus}特殊扩展目录的同步`,
-            icon: '$(extensions)'
         },
         {
             label: '$(gear) 设置',
@@ -969,11 +887,7 @@ async function showSyncMenu(): Promise<void> {
     );
 
     if (selected) {
-        if (selected.option.command === 'cursor-sync.toggleExtensionSync') {
-            await toggleExtensionSync();
-        } else {
-            vscode.commands.executeCommand(selected.option.command);
-        }
+        vscode.commands.executeCommand(selected.option.command);
     }
 }
 
@@ -982,24 +896,6 @@ async function showSyncMenu(): Promise<void> {
  */
 function getCurrentSyncTarget(): SyncTarget {
     return SyncTarget.GITHUB;
-}
-
-/**
- * 打开扩展同步配置
- */
-async function toggleExtensionSync(): Promise<void> {
-    const config = vscode.workspace.getConfiguration('cursor-sync');
-    const currentValue = config.get<boolean>('syncExtensions', DEFAULT_CONFIG.syncExtensions);
-
-    // 切换值
-    await config.update('syncExtensions', !currentValue, vscode.ConfigurationTarget.Global);
-
-    // 显示确认信息
-    const newStatus = !currentValue ? '启用' : '禁用';
-    void vscode.window.showInformationMessage(`已${newStatus}扩展目录同步`);
-
-    // 更新状态栏
-    updateSyncStatus(`$(info) 已${newStatus}扩展同步`, true);
 }
 
 /**
@@ -1259,51 +1155,46 @@ async function syncFromGitHub(): Promise<void> {
         }
 
         // 添加特殊扩展文件
-        const shouldSyncExtensions = config.get<boolean>('syncExtensions', DEFAULT_CONFIG.syncExtensions);
-        if (shouldSyncExtensions) {
-            // 从设置中获取扩展列表
-            const extensionsListStr = config.get<string>('extensionsList', DEFAULT_CONFIG.extensionsList);
-            const extensionsList = extensionsListStr.split(',').map(ext => ext.trim()).filter(ext => ext);
+        // 从设置中获取扩展列表
+        const extensionsListStr = config.get<string>('extensionsList', DEFAULT_CONFIG.extensionsList);
+        const extensionsList = extensionsListStr.split(',').map(ext => ext.trim()).filter(ext => ext);
 
-            for (const extName of extensionsList) {
-                try {
-                    if (!octokit) {
-                        throw new Error('Octokit未初始化');
-                    }
-
-                    const extResponse = await octokit.repos.getContent({
-                        owner: username,
-                        repo: repoName,
-                        path: `extensions/${extName}`
-                    });
-
-                    if (Array.isArray(extResponse.data)) {
-                        // 确保扩展目录存在
-                        const extDir = path.join(CONFIG_PATHS.extensionsDir, extName);
-                        if (!fs.existsSync(extDir)) {
-                            fs.mkdirSync(extDir, { recursive: true });
-                        }
-
-                        const specificFiles = [ 'package.json', 'README.md', 'extension.vsixmanifest', 'extension.js' ];
-
-                        for (const item of extResponse.data) {
-                            if (item.type === 'file' && specificFiles.includes(item.name)) {
-                                filesToSync.push({
-                                    remotePath: `extensions/${extName}/${item.name}`,
-                                    localPath: path.join(extDir, item.name)
-                                });
-                            }
-                        }
-                    }
-                } catch (error) {
-                    if ((error as any).status !== 404) {
-                        console.error(`获取扩展目录失败: ${extName}`, error);
-                    }
-                    // 如果是404，说明没有该扩展目录，跳过即可
+        for (const extName of extensionsList) {
+            try {
+                if (!octokit) {
+                    throw new Error('Octokit未初始化');
                 }
+
+                const extResponse = await octokit.repos.getContent({
+                    owner: username,
+                    repo: repoName,
+                    path: `extensions/${extName}`
+                });
+
+                if (Array.isArray(extResponse.data)) {
+                    // 确保扩展目录存在
+                    const extDir = path.join(CONFIG_PATHS.extensionsDir, extName);
+                    if (!fs.existsSync(extDir)) {
+                        fs.mkdirSync(extDir, { recursive: true });
+                    }
+
+                    const specificFiles = [ 'package.json', 'README.md', 'extension.vsixmanifest', 'extension.js' ];
+
+                    for (const item of extResponse.data) {
+                        if (item.type === 'file' && specificFiles.includes(item.name)) {
+                            filesToSync.push({
+                                remotePath: `extensions/${extName}/${item.name}`,
+                                localPath: path.join(extDir, item.name)
+                            });
+                        }
+                    }
+                }
+            } catch (error) {
+                if ((error as any).status !== 404) {
+                    console.error(`获取扩展目录失败: ${extName}`, error);
+                }
+                // 如果是404，说明没有该扩展目录，跳过即可
             }
-        } else {
-            console.log('根据配置，跳过同步扩展目录');
         }
 
         console.log(`准备从GitHub同步 ${filesToSync.length} 个文件`);

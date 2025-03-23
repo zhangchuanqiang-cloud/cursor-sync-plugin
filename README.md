@@ -1,47 +1,48 @@
 # Cursor 配置同步插件
 
-这个插件可以帮助你同步Cursor的配置文件到iCloud云端，便于在多台设备之间同步配置。
+这个插件可以帮助你同步Cursor的配置文件，便于在多台设备之间同步配置。
 
 ## 功能特点
 
-- 自动同步Cursor配置到iCloud指定目录
-- 支持从iCloud导入配置到当前设备
-- 监听配置文件变更，自动执行同步
 - 支持同步以下配置内容:
   - MCP配置文件 (mcp.json)
   - 扩展插件配置 (extensions.json)
   - 代码片段 (snippets)
   - 快捷键配置 (keybindings.json)
   - 设置配置 (settings.json)
-  - 特定的扩展目录 (如中文插件等)
+  - 扩展目录同步
 
 ## 使用方法
 
-### 同步配置到云端
+### 配置GitHub
 
-1. 运行命令 `Cursor Sync: 同步Cursor配置到云端`
-2. 配置将被同步到iCloud目录: `~/Library/Mobile Documents/com~apple~CloudDocs/cursor-config-sync`
+1. 首次使用时，会提示设置GitHub个人访问令牌（需要repo权限）
+2. 输入GitHub用户名和令牌后，插件会自动验证连接
+3. 如需修改，可在设置中更新`cursor-sync.githubToken`和`cursor-sync.githubUsername`
 
-### 从云端导入配置
+### 同步配置到GitHub
 
-1. 运行命令 `Cursor Sync: 从云端导入Cursor配置`
-2. 配置将从iCloud目录导入到当前设备
+1. 点击状态栏中的"Cursor同步"图标，或运行命令`Cursor Sync: 显示同步菜单`
+2. 选择"上传配置"选项
+3. 如果GitHub仓库不存在，会提示你创建一个新仓库
+4. 配置将被同步到GitHub仓库
 
-### 自动同步
+### 从GitHub导入配置
 
-1. 在设置中启用 `cursor-sync.autoSync` 选项
-2. 当配置文件变更时，将自动同步到云端
+1. 点击状态栏中的"Cursor同步"图标，或运行命令`Cursor Sync: 显示同步菜单`
+2. 选择"恢复配置"选项
+3. 确认后，将从GitHub下载配置到当前设备
 
-## 要同步的特定扩展
+### 配置要同步的扩展
 
-- qianggaogao.vscode-gutter-preview-cn-0.32.2
-- zh-community.insertseq-zh-0.10.1-zh
+在设置中编辑`cursor-sync.extensionsList`项，添加要同步的扩展ID，以逗号分隔
 
 ## 注意事项
 
 - 同步会覆盖目标位置的现有文件
 - 为避免冲突，建议在多台设备间切换时先同步再使用
-- 若遇到同步错误，请查看控制台日志
+- 若遇到同步错误，插件会显示详细错误信息
+- 确保GitHub令牌具有正确的仓库访问权限
 
 ## 贡献
 
@@ -49,4 +50,4 @@
 
 ## 许可证
 
-MIT 
+MIT
